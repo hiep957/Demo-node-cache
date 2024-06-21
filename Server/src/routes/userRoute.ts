@@ -7,16 +7,16 @@ import instance from "../untils/CacheManager";
 import { verifyToken, isAdmin } from "../middlewares/auth";
 const router = express.Router();
 
-router.get("/", async (req: Request, res: Response) => {
-  try {
-    
-    const users = await User.find(); // Assuming you're using Mongoose
-    res.status(200).json({cacheKey: instance.getStats(),users: users});
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Something went wrong" });
-  }
-});
+// router.get("/", async (req: Request, res: Response) => {
+//   try {
+
+//     const users = await User.find(); // Assuming you're using Mongoose
+//     res.status(200).json({cacheKey: instance.getStats(),users: users});
+//   } catch (error) {
+//     console.log(error);
+//     res.status(500).json({ msg: "Something went wrong" });
+//   }
+// });
 
 router.post(
   "/register",
@@ -64,6 +64,17 @@ router.post(
     const { email, password } = req.body;
 
     try {
+      //lấy thông tin từ cache về thông tin đăng nhập
+      const cachedUser = instance.get(`login_${email}`);
+      //nếu có trả về cookie thông tin đăng nhập
+      if (cachedUser) {
+        res.cookie("auth", cachedUser.token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          maxAge: 86400000,
+        });
+        return res.status(200).json(cachedUser);
+      }
       const user = await User.findOne({ email });
       if (!user) {
         throw new ApiError(400, "User not found");
@@ -73,9 +84,7 @@ router.post(
       if (!isMatch) {
         throw new ApiError(400, "Password mismatch");
       }
-      const cacheKey = `login_${user._id}`;
-      instance.set(cacheKey, user, 3600);
-    //   console.log("Cache đăng nhập: ", instance.get(cacheKey));
+
       const token = jwt.sign(
         { userId: user.id, role: user.role },
         process.env.JWT_SECRET_KEY as string,
@@ -87,8 +96,10 @@ router.post(
         secure: process.env.NODE_ENV === "production",
         maxAge: 86400000,
       });
-
-      res.status(200).json({ userId: user._id, token: token });
+      //lưu thông tin đăng nhập vào cache
+      const responsePayload = { userId: user._id, token: token };
+      instance.set(`login_${email}`, responsePayload, 3600);
+      res.status(200).json(responsePayload);
     } catch (err) {
       next(err);
     }
@@ -100,6 +111,7 @@ router.get(
   verifyToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Lấy thông tin người dùng từ cache
       const cacheKey = `login_${req.userId}`;
       let user = instance.get(cacheKey);
 
@@ -118,10 +130,51 @@ router.get(
   }
 );
 
-router.get("/logout", (req: Request, res: Response) => {
-  res.clearCookie("auth");
-  res.status(200).json({ message: "Logout successfully" });
-});
+router.put(
+  "/me",
+  verifyToken,
+
+  async (req: Request, res: Response) => {
+    try {
+      const user = await User.findById(req.userId);
+      if (!user) {
+        return res.status(404).json({ msg: "User not found" });
+      }
+
+      // Update user information
+      user.firstName = req.body.firstName || user.firstName;
+      user.email = req.body.email || user.email;
+      user.role = req.body.role || user.role;
+      user.lastName = req.body.lastName || user.lastName;
+      user.phone = req.body.phone || user.phone;
+      user.hometown = req.body.hometown || user.hometown;
+      user.gender = req.body.gender || user.gender;
+      // Add more fields as needed
+
+      const updatedUser = await user.save();
+
+      res.status(200).json(updatedUser);
+    } catch (error) {
+      console.log(error);
+      res.status(500).json({ msg: "Something went wrong" });
+    }
+  }
+);
+
+router.post(
+  "/logout",
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { email } = req.body;
+    try {
+      // instance.del(`login_${email}`);
+      res.clearCookie("auth");
+
+      res.status(200).json({ message: "Logout successfully" });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 router.get("/validate-token", verifyToken, (req: Request, res: Response) => {
   try {
     console.log("checkvalidate");
